@@ -1,0 +1,301 @@
+---
+title: "Development of a computational framework to detect and quantify nerve hotspots"
+author: "Dimitrios Kleftogiannis"
+date: "2024-07-05"
+output: html_document
+---
+
+### Utility
+
+The utility of this code is to process data from  mass cytometry imaging technologies and identify areas in the images that represent possible nerve elements. 
+
+Such elements will be called "hotspots" and their presence is supported by the expression of nerve specific antibodies. In the analysis presented below we used peripherin as a nerve marker, but any other relevant nerve marker can be used.
+
+To generalise the utility of this code, it essentially merging nuclei-based information of single-cells with any pixel-based data from the same image that have been processed individually. This is useful when we want to combine different elements in the images that go beyond the standard single-cell analysis.  
+
+To be able to follow the pipeline we will provide some toy data and we will generate some basic visualisations and outputs that summarise the nerve hotspots.
+
+The cohort data provided are courtesy of CCBIO, they are breast cancer tissue biopsies and contact person for the full dataset is Dr Kenneth Finne (kenneth.finne@uib.no) 
+
+### Contact
+
+Comments and bug reports are welcome. 
+Please email: Dr Dimitrios Kleftogiannis (dimitrios.kleftogiannis@uib.no)
+
+We are also interested to know about how you have used our source code, including any improvements that you have implemented.
+ 
+You are free to modify, extend or distribute our source code, as long as our copyright notice remains unchanged and included in its entirety. 
+
+### License
+
+This code is licensed under the MIT License.
+
+Copyright 2024, NeuroSysMed centre of clinical treatment research, University of Bergen (UiB), Norway
+
+### Load packages. 
+We load some packages required for the analysis. Please make sure that these packages are installed either via CRAN or from their relevant resources (github or Bioconductor).
+
+```{r load packages, echo=FALSE, eval=TRUE, error=FALSE, warning=FALSE,cache=TRUE}
+library("EBImage")
+library("cytomapper")
+library("ggplot2")
+library(SingleCellExperiment)
+library(RColorBrewer)
+library(ggforce)
+library(SpatialExperiment)
+library(imcRtools)
+```
+
+### Load the data required and process the images
+
+To run the pipeline is it necessary to execute externally nerve-specific segmentation using the Ilastik or any other compatible pipeline and segmentation masks in tiff format must be provided in a separate folder.
+
+It is also recommended to perform and complete nuclei segmentation and single-cell data must processed and phenotype before running this pipeline. We recommend the Steinbock pipeline for single-cell data processing, and the single-cell data must be provided as an input here from an external file in a spatial experiment  format (saved as rds object).
+
+Also note that in order to match nerve segmentation with nuclei segmentation the images must be indexed with the same name. Otherwise the pipeline will fail to run. 
+
+Please check and download the folder named "input_data". 
+
+For bulk processing of the images we also recommend to use a simple data file in txt format that  lists all file names of the nerve segmentation masks to be processed (see file_list.txt)  
+
+```{r set wd and read data, echo=FALSE, eval=TRUE, error=TRUE, warning=FALSE,cache=TRUE}
+
+#set manually the working dir --> this has to be changed once you download the git repo locally in your computer
+myWorkDir <- paste('/Users/kleftogi/Desktop/IMC_new_cohort/NerveHostspotDetector/',sep='')
+setwd(myWorkDir)
+
+#define the file containing a list of files to process
+filename <- "input_data/file_list.txt"
+file_list <- read.table(filename)
+colnames(file_list)[1] <- 'Filename'
+
+#show the file names
+cat('The file names we will use are: ')
+file_list
+
+#load the single cell experiment with the single cell data based on nuclei segmentation
+nuclei_single_cell_filename <-paste(myWorkDir,'/input_data/single_cell_data.rds',sep='')
+spe <- readRDS(nuclei_single_cell_filename)
+
+#show how many single cells are available per file name.
+#please check that this must check the file names of the masks shown just above.
+cat('The number of single cells per image are: ')
+table(spe$sample_id)
+
+#initialise colors
+cols <- brewer.pal(3, "BuGn")
+pal <- colorRampPalette(cols)
+
+#########################################################################  
+# Process all samples in bulk based on the filenames in the file list 
+#########################################################################  
+
+
+start_time = Sys.time()
+#parse the tiff files one by one and count them 
+myC <- 1
+#store some plots
+nerve_plot_list <- list()
+combined_plot_list <- list()
+plorIdx <- 1
+combIdx <- 1
+#save some summary stats about the nerve hotspots found
+summaryNerveStats <- data.frame()
+for(idx in file_list$Filename){
+  
+  str <- paste('Processing sample: ',idx,' ',myC,'/',nrow(file_list),sep='')  
+  print(str)
+  #read the image --> check that the complete input file name is correct
+  currentFilename <- paste(myWorkDir,'input_data/',idx,sep='')
+  img <- readImage(currentFilename,as.is = TRUE)
+  #split the image into the channels
+  img1 <- getFrame(img,1)
+  img2 <- getFrame(img,2)
+  #make watershed segmentation
+  #we use a small tolerance value to combine scattered nerve pixels together
+  #but this parameter is required to be tuned
+  myTolerance <- 0.0002
+  nmask <- watershed( distmap(img1),myTolerance,ext=1)
+  #retrieve spatial features for the mask
+  coords <- computeFeatures.moment(nmask,img2)
+  coords <- as.data.frame(coords)
+  #add more features
+  coords1 <- computeFeatures.shape(nmask,ref = img2)
+  coords1 <- as.data.frame(coords1)
+  #and more features....
+  coords2 <- computeFeatures.basic(nmask,ref = img2)
+  coords2 <- as.data.frame(coords2)
+  #combine everything into one data frame
+  coords$Area <- coords1$s.area
+  coords$Radius <- coords1$s.radius.mean
+  coords$Intensity <- coords2$b.mean
+  
+  #filter the nerve pixel coords using the Area value
+  #use cutoff lower than 5% quantile --> this can be adjusted as well depending on the application
+  myCutOff <- quantile(coords$Area,0.05)
+  
+  #data frame coords contains the X,Y coordinates of the nerve hotspots together with extra information about the Area and the radius of these. The intensity value also shows how bright were the pixels that correspond to the antibody used for detecting these pixels.
+  
+  coords <- coords[coords$Area>myCutOff,]
+  
+  #we require at least 2 to plot
+  if(nrow(coords)>2){
+    
+   o <- ggplot() +
+      geom_circle(aes(x0 = m.cx, y0 = -m.cy, r = Radius, fill = Area), data = coords)+
+      scale_fill_gradientn("Area",colours = pal(20))+
+      ggtitle(idx)+
+     ylim(-850,0)+
+     xlim(0,850)+
+      theme_bw()+
+      theme(aspect.ratio = 1)
+   nerve_plot_list[[plorIdx]] <- o
+   plorIdx <- plorIdx + 1
+  }
+  
+  #store the data to be tabulated
+  if(nrow(coords)>0){
+    df <- data.frame(Sample=idx,
+                     NumberOfPixels=nrow(coords),
+                     AvgArea=mean(coords$Area),
+                     AvgRadius=mean(coords$Radius),
+                     AvgPeripherin=mean(coords$Intensity))
+  }else{
+    df <- data.frame(Sample=idx,
+                     NumberOfPixels=0,
+                     AvgArea=0,
+                     AvgRadius=0,
+                     AvgPeripherin=0)
+  }
+  summaryNerveStats <- rbind(summaryNerveStats,df)
+  
+  ##############################################################
+  #find the common file names between the spe and the list of tiffs from the nerve segmentation
+  #intersect(gsub('.tiff','',file_list$Filename),unique(spe$sample_id))
+  
+  #add the info about cells and their phenotypes
+  #only for the ones that have coordinates
+  if(nrow(coords)>0){
+      
+    currentSample <- gsub('.tiff','',idx)
+    #subset the complete set of single cells called spe from before
+    tmp <- spe[, spe$sample_id == currentSample]
+    matCoord <- spatialCoords(tmp)
+    axis_major_lenght <- tmp$axis_major_length
+    eccentricity <- tmp$eccentricity
+    area <- tmp$area
+    #retrieve from the spe the single cell coordinates together with some other info required
+    #note that the tmp$CombinedAnnotation column contains the single cell phenotyping results
+    #that must be performed in advance before running this pipeline. 
+    #Any of the state of the art methods for phenotyping can be applied including unsupervised clustering or gating 
+    dt <- data.frame(X=matCoord[,1],
+                     Y=matCoord[,2],
+                     axis_major_lenght=axis_major_lenght,
+                     eccentricity=eccentricity,
+                     theta=-1,
+                     Area=0.8,
+                     Radius=0.8,
+                     Intensity=-1,
+                     CombinedAnnotation=tmp$CombinedAnnotation)
+    #make the column names in coords consistent with the column names of dt from before 
+    colnames(coords)[1] <- "X"
+    colnames(coords)[2] <- "Y"
+    colnames(coords)[3] <- 'axis_major_lenght'
+    colnames(coords)[4] <- 'eccentricity'
+    colnames(coords)[5] <- 'theta'
+    coords$CombinedAnnotation <- 'NerveHotspot'
+    #bind them together
+    dt <- rbind(dt,coords)
+    
+    #here for over simpliication we merge some of the specific cell types found in cancer patients into one cell type that we call 'Cancer'
+    #please note that this step is application-specific and different applications might have different cell types that cannot be merged into one.
+    #if that's the case please skip this step, or modify your cell types accordingly
+    dt[dt$CombinedAnnotation=='Epithelial_CK14+'| dt$CombinedAnnotation=='Epithelial_CK14+_CK818+' |
+         dt$CombinedAnnotation=='Epithelial_CK56+' | dt$CombinedAnnotation=='Epithelial_CK56+_CK14+' |
+         dt$CombinedAnnotation=='Epithelial_CK56+_CK818+' | dt$CombinedAnnotation=='Epithelial_CK818+' |
+         dt$CombinedAnnotation=='Epithelial_Other' |dt$CombinedAnnotation=='Undefined'  , 'CombinedAnnotation'] <- 'Cancer'
+    
+    
+    #perform some data manipulation to be able to generate a combined spatial experiment that contains pixel-based nerve hotspots and single-cells
+    dt$sample_id <- currentSample
+    dt$ROI <- currentSample
+    all_coords <- dt[,c("X", "Y")]
+    sce <- SpatialExperiment(assays=list(counts=matrix(-1,ncol = nrow(dt),nrow=35)),
+                             sample_id = currentSample,
+                             #spatialCoordsNames=c('X','Y'),
+                             spatialCoords = as.matrix(all_coords))
+    
+    sce$sample_id <- currentSample
+    #this command can be also modified with different parameters, depending on specific application used
+    sce <- buildSpatialGraph(sce, img_id = "sample_id", type = "expansion", threshold = 20,
+                             coords=c('X','Y'))
+    sce$Area <- dt$Area
+    sce$Radius <- dt$Radius
+    sce$celltype <- dt$CombinedAnnotation
+    #again this part is application specific, and must be changed depending on the application and the availabel cell types in the dataset
+    sce$celltype <- factor(sce$celltype, levels=c("Cancer","Endothelial","Stromal",
+                                                  "B_cells","Macrophages_CD163-","Macrophages_CD163+",
+                                                  "T_cytotoxic" ,"T_helper" ,"T_regulatory","Immune_other",
+                                                  'NerveHotspot'))
+    
+    #define some colors, more colors must be defined if more cell types are available in future applications
+    mycols_basel_meta <- c('tomato3','orange','thistle2',
+                           'mediumpurple1','skyblue2','steelblue3',
+                           'springgreen2','springgreen3','springgreen4','darkolivegreen4',
+                           'black')
+    
+    o <- plotSpatial(sce,
+                     node_color_by = "celltype",
+                     img_id = "sample_id", 
+                     draw_edges = TRUE, 
+                     colPairName = "expansion_interaction_graph", 
+                     nodes_first = FALSE,
+                     #node_size_by="Radius",
+                     node_size_fix = 0.8,
+                     edge_width_fix = 0.05,
+                     edge_color_fix = "grey",
+                     coords=c('X','Y'))+ 
+      scale_color_manual(values=mycols_basel_meta)+
+      theme(legend.position = 'bottom',
+            axis.text.y = element_blank(),
+            axis.text.x = element_blank())+
+      guides(colour = guide_legend(override.aes = list(size=0.8),nrow=2,title=""))
+    
+    combined_plot_list[[combIdx]] <- o
+    combIdx <- combIdx + 1
+  }
+  
+  ##############################################################
+  #combine spatial experiments after adding the nerve hotspots
+  #this is useful for future analysis
+  ##############################################################
+  if(myC==1){
+    #this is the first sample so we just initialise
+    allHotspotsSpe <- sce
+  }else{
+    allHotspotsSpe <- cbind(allHotspotsSpe,sce)
+  }
+  myC <- myC+1
+}
+end_time = Sys.time()
+end_time-start_time
+
+#show the updated spatial experiment object with the nerve hotspots
+cat('The total size of the objects including single-cells and nerve hotspots: ')
+table(allHotspotsSpe$sample_id)
+
+#show the summary statistics of nerve hotspots found 
+cat('Summary of the nerve hotspots found: ')
+summaryNerveStats
+
+#and visualise in bulk all images generated from the previous code
+for(idx in 1:length(combined_plot_list)){
+  plot(combined_plot_list[[idx]])
+}
+
+for(idx in 1:length(nerve_plot_list)){
+  plot(nerve_plot_list[[idx]])
+}
+
+```
+
