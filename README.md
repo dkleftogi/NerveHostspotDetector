@@ -2,9 +2,9 @@
 
 The utility of this code is to process data from mass cytometry imaging technologies and identify areas in the images that represent possible nerve elements. 
 
-To do so we will utilise pixel based information and the elements we will find will be called "hotspots". They represent proxies of nerves and their presence is supported by the expression of nerve specific antibodies in panel.
+To do so we will utilise pixel based information and we define "hotspots". Hotspots represent proxies of nerves and their presence is supported by the expression of nerve specific antibodies in panel. But since the information about nerves (axons, bodies etc) is rather ambiguous with conventional 2D imaging, we generate square areas in the images representing increased nerve activity.  
 
-Here we provide codes and datasets required to reproduce the framework.
+Here we provide codes and datasets required to implement this idea and reproduce the framework we developed.
 
 ## Publication
 
