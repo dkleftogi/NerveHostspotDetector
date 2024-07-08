@@ -44,6 +44,7 @@ library(RColorBrewer)
 library(ggforce)
 library(SpatialExperiment)
 library(imcRtools)
+library(sp)
 ```
 
 ### Load the data required and process the images
@@ -58,7 +59,7 @@ Please check and download the folder named "input_data".
 
 For bulk processing of the images we also recommend to use a simple data file in txt format that  lists all file names of the nerve segmentation masks to be processed (see file_list.txt)  
 
-```{r set wd and read data, echo=FALSE, eval=TRUE, error=TRUE, warning=FALSE,cache=TRUE}
+```{r set wd, read and process data, echo=FALSE, eval=TRUE, error=TRUE, warning=FALSE,cache=TRUE}
 
 #set manually the working dir --> this has to be changed once you download the git repo locally in your computer
 myWorkDir <- paste('/Users/kleftogi/Desktop/IMC_new_cohort/NerveHostspotDetector/',sep='')
@@ -285,7 +286,7 @@ cat('The total size of the objects including single-cells and nerve hotspots: ')
 table(allHotspotsSpe$sample_id)
 
 #show the summary statistics of nerve hotspots found 
-cat('Summary of the nerve hotspots found: ')
+cat('Show a summary of all nerve pixels found: ')
 summaryNerveStats
 
 #and visualise in bulk all images generated from the previous code
@@ -299,3 +300,166 @@ for(idx in 1:length(nerve_plot_list)){
 
 ```
 
+
+### Downstream analyses
+
+Now that the pixel-based detection of nerve hotspots has been incorporated to the single-cell experiment, we can perform different types of downstream analysis.
+
+In fact, with the objects we have created the spatial analysis pipelines published here https://bodenmillergroup.github.io/IMCDataAnalysis/performing-spatial-analysis.html are readily applicable and the results of this analysis can be associated with clinical info if available.
+
+For now we will perform some extra visualisations of the nerve hotspots. 
+
+```{r downstream analysis, echo=FALSE, eval=TRUE, error=TRUE, warning=FALSE,cache=TRUE}
+library(sp)
+#since we have to generate grid with need a step that describes the size of hotspots
+myStep <- 25
+GridEnd <- 850 - myStep
+#the analysis might have to be repreated for different size of grid steps
+
+myC <- 1
+nerve_hotspot_list <- list()
+allHotSpots <- data.frame()
+for(idx in file_list$Filename){
+  
+  str <- paste('Processing sample: ',idx,' ',myC,'/',nrow(file_list),sep='')  
+  print(str)
+  currentSample <- gsub('.tiff','',idx)
+  tmpSpe <- allHotspotsSpe[,allHotspotsSpe$sample_id==currentSample]
+  #focus only on the NerveHotspot
+  tmpSpe <- tmpSpe[,tmpSpe$celltype=='NerveHotspot']
+  #retrieve the coordinates
+  tmpCoord <- spatialCoords(tmpSpe)
+  dt <- data.frame(Area=tmpSpe$Area,
+                   Radius=tmpSpe$Radius,
+                   tmpCoord)
+
+  #generate grid coordinates with function
+  #griddf <- expand.grid( Y = seq(from = -850, to=0,by = myStep),
+  #                     X = seq(from = 0, to=850,by = myStep))
+
+  #generate grid squares and find overlap with points from nerve hotspots
+  HotSpotSummary <- data.frame()
+  for(myX in seq(from = 0, to=GridEnd,by = myStep)){
+    X_start <- myX
+    X_end <- myX+myStep
+    for(myY in seq(from = 0, to=GridEnd,by = myStep)){
+      Y_start <- myY
+      Y_end <- myY+myStep
+      #at this point we have the coordinates and we have to screen our nerve pixels coordinates to find if they are inside the square
+      tmpHotspot <- data.frame()
+      for(K in 1:nrow(dt)){
+        X_nerve <- dt[K,'X']
+        Y_nerve <- dt[K,'Y'] 
+        #very careful here on how you write the coordinates
+        res <- point.in.polygon(c(X_nerve),c(Y_nerve),
+                                c(X_start,X_end,X_end,X_start),
+                                c(Y_start,Y_start,Y_end,Y_end))
+        if(res==0){
+          radius <- 0
+          area <- 0
+          inside <- 0
+        }else{
+          radius <- dt[K,'Radius']
+          area <- dt[K,'Area']
+          inside <- 1
+        }
+        tmpRes <- data.frame(X=X_start+(myStep/2),
+                                 Y=Y_start+(myStep/2),
+                                 Sx1=X_start,
+                                 Sx2=X_end,
+                                 Sy1=Y_start,
+                                 Sy2=Y_end,
+                                 X_nerve=X_nerve,
+                                 Y_nerve=Y_nerve,
+                                 Inside=inside,
+                                 Radius=radius,
+                                 Area=area)
+        tmpHotspot <- rbind(tmpHotspot,tmpRes)
+      }
+      
+      #aggregate and store
+      if(sum(tmpHotspot$Inside)==0){
+        #this means that there is no pixel inside the square so we add zero to everything
+        tmpRes <- data.frame(X=X_start+(myStep/2),
+                                 Y=Y_start+(myStep/2),
+                                 Sx1=X_start,
+                                 Sx2=X_end,
+                                 Sy1=Y_start,
+                                 Sy2=Y_end,
+                                 X_nerve=-1,
+                                 Y_nerve=-1,
+                                 AvgDist=-1,
+                                 PixelsFound=0,
+                                 AvgRadius=0,
+                                 AvgArea=0,
+                                 MaxRadius=0,
+                                 MaxArea=0)
+      }else{
+        #here means that we have at least one success
+        a <- which(tmpHotspot$Inside==1)
+        tmpHotspot <- tmpHotspot[a,]
+        tmp <- tmpHotspot[,c(7,8)]
+        if(nrow(tmpHotspot)==1){
+          myDist <- 0
+        }else{
+          myDist <- mean(dist(tmp),na.rm=T)
+        }
+        tmpRes <- data.frame(X=X_start+(myStep/2),
+                                 Y=Y_start+(myStep/2),
+                                 Sx1=X_start,
+                                 Sx2=X_end,
+                                 Sy1=Y_start,
+                                 Sy2=Y_end,
+                                 X_nerve=mean(tmpHotspot$X_nerve),
+                                 Y_nerve=mean(tmpHotspot$Y_nerve),
+                                 AvgDist=myDist,
+                                 PixelsFound=nrow(tmpHotspot),
+                                 AvgRadius=mean(tmpHotspot$Radius,na.rm=T),
+                                 AvgArea=mean(tmpHotspot$Area,na.rm=T),
+                                 MaxRadius=max(tmpHotspot$Radius,na.rm=T),
+                                 MaxArea=max(tmpHotspot$Area,na.rm=T))
+        
+      }
+      HotSpotSummary <- rbind(HotSpotSummary,tmpRes)
+    }
+  }
+  
+  # plot heatmap of expression for 100 clusters
+breaks <- seq(0, 1, by = 0.05)
+white.red <- colorRampPalette(c("white", "red"))(n = 20)
+  
+  o <- ggplot()+
+    geom_raster(data=HotSpotSummary,aes(x=X,y=-Y,fill=AvgArea),size=0.3,shape=4)+
+    scale_fill_gradientn("Nerve hotspots (avg.Area) ",colours = white.red)+
+    geom_point(data=HotSpotSummary,aes(x=X,y=-Y),size=0.4,color='gray88')+
+    theme_minimal()+
+    ggtitle(idx)+
+    theme(axis.text.y = element_text(size = 8 ),
+          axis.text.x = element_text(size = 8,angle = 0, vjust = 0.5, hjust = 0.5),
+          axis.title.x = element_text( size = 8),
+          axis.title.y = element_text(size = 8),
+          strip.text = element_text(size = 8,face='bold',lineheight=1),
+          legend.position = "bottom",aspect.ratio = 1)
+
+  nerve_hotspot_list[[myC]] <- o 
+  myC <- myC + 1
+  
+  #gather info from all samples
+    HotSpotSummary$Sample <- currentSample
+    HotSpotSummary$TotalPixels <- nrow(dt)
+    HotSpotSummary$AvgPixelArea <- mean(dt$Area,na.rm=T)
+    HotSpotSummary$AvgPixelRadius <- mean(dt$Radius,na.rm=T)
+    allHotSpots <- rbind(allHotSpots,HotSpotSummary)
+
+}
+
+for(idx in 1:length(nerve_hotspot_list)){
+  plot(nerve_hotspot_list[[idx]])
+}
+
+#show the summary statistics of nerve hotspots found 
+cat('Show info about nerve hotspots: ')
+head(allHotSpots)
+
+
+```
