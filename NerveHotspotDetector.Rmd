@@ -477,7 +477,7 @@ For example, the code introduced below can be fed to the diffcyt pipeline to fin
 
 TODO: more applications and scenarios will be presented in the future
 
-```{r downstream analysis part 1, echo=FALSE, eval=TRUE, error=TRUE, warning=FALSE,cache=TRUE}
+```{r downstream analysis part II, echo=FALSE, eval=TRUE, error=TRUE, warning=FALSE,cache=TRUE}
 
 
 library(sp)
