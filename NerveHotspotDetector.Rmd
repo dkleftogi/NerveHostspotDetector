@@ -301,15 +301,14 @@ for(idx in 1:length(nerve_plot_list)){
 ```
 
 
-### Downstream analyses
+### Downstream analyses - part I
 
 Now that the pixel-based detection of nerve hotspots has been incorporated to the single-cell experiment, we can perform different types of downstream analysis.
 
-In fact, with the objects we have created the spatial analysis pipelines published here https://bodenmillergroup.github.io/IMCDataAnalysis/performing-spatial-analysis.html are readily applicable and the results of this analysis can be associated with clinical info if available.
+First we will summarise the hotspots per image to engineer features and we will perform some visualisations of the nerve hotspots. 
 
-For now we will perform some extra visualisations of the nerve hotspots. 
 
-```{r downstream analysis, echo=FALSE, eval=TRUE, error=TRUE, warning=FALSE,cache=TRUE}
+```{r downstream analysis part I, echo=FALSE, eval=TRUE, error=TRUE, warning=FALSE,cache=TRUE}
 library(sp)
 #since we have to generate grid with need a step that describes the size of hotspots
 myStep <- 25
@@ -463,3 +462,92 @@ head(allHotSpots)
 
 
 ```
+
+
+
+### Downstream analyses - part II
+
+With the objects we have created in the previous subsection the spatial analysis pipelines published here https://bodenmillergroup.github.io/IMCDataAnalysis/performing-spatial-analysis.html are readily applicable and the results of this analysis can be associated with clinical info if available.
+
+We continue the analysis by computing the cellular abundance per hotspot. 
+
+With this we will be able to perform differential abundance analysis and discover potential associations with nerve elements.
+
+For example, the code introduced below can be fed to the diffcyt pipeline to find differences in the abundance between areas (squares) that have nerve elements, versus the ones that do not. 
+
+TODO: more applications and scenarios will be presented in the future
+
+```{r downstream analysis part 1, echo=FALSE, eval=TRUE, error=TRUE, warning=FALSE,cache=TRUE}
+
+
+library(sp)
+#since we have to generate grid with need a step that describes the size of hotspots
+myStep <- 25
+GridEnd <- 850 - myStep
+#the analysis might have to be repreated for different size of grid steps
+myC <- 1
+myFilenames <- unique(allHotspotsSpe$sample_id)
+HotSpotAbundance <- data.frame()
+
+start_time = Sys.time()
+for(idx in myFilenames){
+  
+  str <- paste('Processing sample: ',idx,' ',myC,'/',length(myFilenames),sep='')  
+  print(str)
+  #currentSample <- gsub('.tiff','',idx)
+  currentSample <- idx
+  tmpSpe <- allHotspotsSpe[,allHotspotsSpe$sample_id==currentSample]
+  #retrieve the coordinates of all elements in the image including the cell type
+  tmpCoord <- spatialCoords(tmpSpe)
+  dt <- data.frame(Area=tmpSpe$Area,
+                   Radius=tmpSpe$Radius,
+                   CellType=tmpSpe$celltype,
+                   tmpCoord)
+
+  
+  #generate grid squares and find overlap with points from nerve hotspots
+  for(myX in seq(from = 0, to=GridEnd,by = myStep)){
+    X_start <- myX
+    X_end <- myX+myStep
+    for(myY in seq(from = 0, to=GridEnd,by = myStep)){
+      Y_start <- myY
+      Y_end <- myY+myStep
+      
+      tmpHotspot <- data.frame()
+      res <- point.in.polygon(c(dt$X),c(dt$Y),
+                                c(X_start,X_end,X_end,X_start),
+                                c(Y_start,Y_start,Y_end,Y_end))
+      a <- which(res!=0)
+      tmpHotspot <- dt[a,]
+      tmpHotspot$CellType <- factor(tmpHotspot$CellType,levels=c("Cancer","Endothelial","Stromal",
+                                                         "B_cells","Macrophages_CD163-","Macrophages_CD163+",
+                                                            "T_cytotoxic" ,"T_helper" ,"T_regulatory","Immune_other",
+                                                            'NerveHotspot'))
+      tmpAbund <- as.data.frame(table(tmpHotspot$CellType))
+      n_cells <- sum(tmpAbund$Freq)
+      n_nerves <- length(which(tmpHotspot$CellType=='NerveHotspot'))
+      #tmpAbund$Freq <- tmpAbund$Freq/sum(tmpAbund$Freq)
+      tmpAbund <- tmpAbund[order(tmpAbund$Var1, decreasing = F),]
+      tmpAbund <- as.data.frame(t(tmpAbund))
+      myColNames <- tmpAbund[1,]
+      tmpAbund <- tmpAbund[2,]
+      colnames(tmpAbund) <- myColNames
+      
+      tmpAbund$NCells <- n_cells
+      tmpAbund$HasNerve <- ifelse(n_nerves>0,1,0)
+      tmpAbund$X <- X_start+(myStep/2)
+      tmpAbund$Y <- Y_start+(myStep/2)
+      tmpAbund$Sample <- currentSample
+      rownames(tmpAbund) <- NULL
+      HotSpotAbundance <- rbind(HotSpotAbundance,tmpAbund)
+    }
+  }
+}
+
+end_time = Sys.time()
+end_time-start_time
+
+
+
+```
+
