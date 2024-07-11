@@ -547,7 +547,134 @@ for(idx in myFilenames){
 end_time = Sys.time()
 end_time-start_time
 
+```
+
+
+### Downstream analyses - part III
+
+Here we will perform the "classic" neighborhood analysis presented in the pipeline published here https://bodenmillergroup.github.io/IMCDataAnalysis/performing-spatial-analysis.html 
+
+The code it also implements some visualisations about the interactions found between cell types and nerve pixels.
+
+Remember that if a pair of cell types is significantly interacting we have sigval = 1, if a pair of cell types is significantly avoiding we have sigval = -1 and if no significant interaction or avoidance was detected we have sigval = 0.
+
+```{r downstream analysis part III, echo=FALSE, eval=TRUE, error=TRUE, warning=FALSE,cache=TRUE}
+
+library(scales)
+library(BiocParallel)
+
+ mycols_basel_meta <- c('tomato3','orange','thistle2',
+                           'mediumpurple1','skyblue2','steelblue3',
+                           'springgreen2','springgreen3','springgreen4','darkolivegreen4',
+                           'black')
+
+interaction_spatial_plots <- list()
+interaction_heatmaps <- list()
+outAll <- data.frame()
+myC <- 1 
+
+start_time = Sys.time()
+
+for(idx in myFilenames){
+  
+  str <- paste('Processing sample: ',idx,' ',myC,'/',length(myFilenames),sep='')  
+  print(str)
+  currentSample <- idx
+  tmpSpe <- allHotspotsSpe[,allHotspotsSpe$sample_id==currentSample]
+  #retrieve the coordinates of all elements in the image including the cell type
+  tmpCoord <- spatialCoords(tmpSpe)
+  sce <- SpatialExperiment(assays=list(counts=matrix(-1,ncol = nrow(tmpCoord),nrow=35)),
+                             sample_id = idx,
+                             #spatialCoordsNames=c('X','Y'),
+                             spatialCoords = as.matrix(tmpCoord))
+    
+    sce$sample_id <- idx
+    sce$celltype=tmpSpe$celltype
+  
+  
+    sce <- buildSpatialGraph(sce, img_id = "sample_id", type = "knn", k = 20,
+                             coords=c('X','Y'))
+    sce <- buildSpatialGraph(sce, img_id = "sample_id", type = "expansion", threshold = 20,
+                             coords=c('X','Y'))
+    sce <- buildSpatialGraph(sce, img_id = "sample_id", type = "delaunay", max_dist = 20,
+                             coords=c('X','Y'))
+    
+    #find the interactions per sample 
+    out <- testInteractions(sce, 
+                          group_by = "sample_id",
+                          label = "celltype", 
+                          colPairName = "knn_interaction_graph",
+                          BPPARAM = SerialParam(RNGseed = 221029))
+    out <- as.data.frame(out)
+    #visualise 
+    o1 <- out %>% as_tibble() %>%
+         group_by(from_label, to_label) %>%
+        summarize(sum_sigval = sum(sigval, na.rm = TRUE)) %>%
+        ggplot() +
+        geom_tile(aes(from_label, to_label, fill = sum_sigval)) +
+        ggtitle(idx)+
+        scale_fill_gradient2(low = muted("blue"), mid = "white", high = muted("red")) +
+        theme(axis.text.x = element_text(angle = 45, hjust = 1))
+    
+    #merge all interaction outs
+    outAll <- rbind(outAll,out)
+    
+    sce$celltype <- factor(sce$celltype, levels=c("Cancer","Endothelial","Stromal",
+                                                         "B_cells","Macrophages_CD163-","Macrophages_CD163+",
+                                                            "T_cytotoxic" ,"T_helper" ,"T_regulatory","Immune_other",
+                                                            'NerveHotspot'))
+      o2 <- plotSpatial(sce,
+                  node_color_by = "celltype",
+                  img_id = "sample_id", 
+                  draw_edges = TRUE, 
+                  colPairName = "knn_interaction_graph", 
+                  nodes_first = FALSE,
+                  node_size_fix = 0.8,
+                  edge_width_fix = 0.05,
+                  edge_color_fix = "grey",
+                  coords=c('X','Y'))+ 
+        scale_color_manual(values=mycols_basel_meta)+
+        theme(legend.position = 'bottom',
+              axis.text.y = element_blank(),
+              axis.text.x = element_blank())+
+        guides(colour = guide_legend(override.aes = list(size=0.8),nrow=2,title=""))
+    
+    interaction_spatial_plots[[myC]] <- o2  
+    interaction_heatmaps[[myC]] <- o1
+    
+    myC <- myC + 1
+}
+  
+end_time = Sys.time()
+end_time-start_time
+
+#visualise the images with interactions 
+for(idx in 1:length(interaction_spatial_plots)){
+  plot(interaction_spatial_plots[[idx]])
+}
+
+#and the heatmaps per sample
+#for(idx in 1:length(interaction_heatmaps)){
+#  plot(interaction_heatmaps[[idx]])
+#}
+
+########################################################################
+#visualise the interactions for the full cohort
+########################################################################
+
+    outAll <- as.data.frame(outAll)
+    
+    #visualise 
+    outAll %>% as_tibble() %>%
+         group_by(from_label, to_label) %>%
+        summarize(sum_sigval = sum(sigval, na.rm = TRUE)) %>%
+        ggplot() +
+        geom_tile(aes(from_label, to_label, fill = sum_sigval)) +
+        ggtitle(idx)+
+        scale_fill_gradient2(low = muted("blue"), mid = "white", high = muted("red")) +
+        theme(axis.text.x = element_text(angle = 45, hjust = 1))
 
 
 ```
+
 
